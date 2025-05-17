@@ -132,6 +132,46 @@ router.post('/disconnect', async (req, res) => {
   }
 });
 
+// Endpoint para entrar en modo privilegiado (enable)
+router.post('/enable', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    
+    // Validar parámetros obligatorios
+    if (!sessionId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Se requiere el parámetro: sessionId' 
+      });
+    }
+    
+    // Verificar que la sesión exista
+    if (!activeSessions[sessionId]) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Sesión no encontrada o expirada' 
+      });
+    }
+    
+    const oltManager = activeSessions[sessionId];
+    
+    // Entrar en modo privilegiado
+    const response = await oltManager.enterEnableMode();
+    
+    res.json({ 
+      success: true, 
+      response,
+      status: oltManager.getStatus()
+    });
+  } catch (error) {
+    console.error('Error al entrar en modo privilegiado:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: `Error al entrar en modo privilegiado: ${error.message}` 
+    });
+  }
+});
+
 // Endpoint para verificar el estado de una sesión
 router.get('/status/:sessionId', (req, res) => {
   const { sessionId } = req.params;

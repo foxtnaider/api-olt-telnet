@@ -130,11 +130,13 @@ class OltTelnetManager {
         
         this.waitingForResponse = false;
         this.buffer = '';
-      } else if (this.buffer.includes('Password:') && this.lastCommand.includes('configure terminal')) {
-        // Detectamos solicitud de contraseña después de 'configure terminal'
-        console.log('Enviando contraseña de habilitación');
-        this.client.write(this.enablePassword + '\n');
-        this.buffer = '';
+      } else if (this.buffer.includes('Password:')) {
+        // Detectamos solicitud de contraseña después de 'configure terminal' o 'enable'
+        if (this.lastCommand.includes('configure terminal') || this.lastCommand.includes('enable')) {
+          console.log('Enviando contraseña de habilitación');
+          this.client.write(this.enablePassword + '\n');
+          this.buffer = '';
+        }
       }
     }
   }
@@ -255,6 +257,23 @@ class OltTelnetManager {
   }
 
   /**
+   * Entra en modo privilegiado (enable)
+   * @returns {Promise<string>} - Promesa que se resuelve cuando se ha entrado en modo privilegiado
+   */
+  async enterEnableMode() {
+    if (!this.connected || !this.loggedIn) {
+      throw new Error('No hay una sesión activa');
+    }
+    
+    if (this.currentPrompt === '#' || this.inConfigMode) {
+      return 'Ya en modo privilegiado';
+    }
+    
+    const response = await this.sendCommand('enable');
+    return response;
+  }
+
+  /**
    * Entra en modo de configuración (configure terminal)
    * @returns {Promise<string>} - Promesa que se resuelve cuando se ha entrado en modo configuración
    */
@@ -265,6 +284,11 @@ class OltTelnetManager {
     
     if (this.inConfigMode) {
       return 'Ya en modo configuración';
+    }
+    
+    // Si no estamos en modo privilegiado, primero entramos en él
+    if (this.currentPrompt !== '#') {
+      await this.enterEnableMode();
     }
     
     const response = await this.sendCommand('configure terminal');
