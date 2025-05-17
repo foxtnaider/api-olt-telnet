@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.git
+.gitignore
+.env
+README.md
+.DS_Store
+Thumbs.db
+coverage
+.vscode
+.idea
+*.swp
+*.swo

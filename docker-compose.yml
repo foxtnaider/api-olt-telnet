@@ -1,0 +1,14 @@
+version: '3'
+
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    restart: unless-stopped
+    volumes:
+      # Volumen para logs (opcional)
+      - ./logs:/usr/src/app/logs
