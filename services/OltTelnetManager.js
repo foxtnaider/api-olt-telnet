@@ -1,5 +1,6 @@
 const net = require('net');
 const logger = require('../utils/logger');
+const responseFormatter = require('../utils/responseFormatter');
 
 /**
  * Clase que gestiona la conexión Telnet a un dispositivo OLT VSOL
@@ -392,7 +393,24 @@ class OltTelnetManager {
       
       // Configurar el estado para esperar respuesta
       this.waitingForResponse = true;
-      this.responseResolver = resolve;
+      
+      // Reemplazar el resolver original para procesar la respuesta
+      const originalResolver = resolve;
+      this.responseResolver = (rawResponse) => {
+        try {
+          // Formatear la respuesta según el tipo de comando
+          logger.debug(`Formateando respuesta para comando: ${command}`);
+          const formattedResponse = responseFormatter.formatResponse(command, rawResponse);
+          
+          // Resolver con la respuesta formateada
+          originalResolver(formattedResponse);
+        } catch (error) {
+          logger.error(`Error al formatear respuesta: ${error.message}`);
+          // Si hay error en el formateo, devolver la respuesta sin formato
+          originalResolver(rawResponse);
+        }
+      };
+      
       this.buffer = '';
       logger.debug('Estado configurado para esperar respuesta');
       
@@ -412,7 +430,16 @@ class OltTelnetManager {
           // Si tenemos respuesta acumulada de paginación, la devolvemos aunque esté incompleta
           if (this.accumulatedResponse && this.accumulatedResponse.length > 0) {
             logger.warn(`Devolviendo respuesta parcial acumulada (${this.accumulatedResponse.length} caracteres)`);
-            resolve(this.extractCommandResponse(this.accumulatedResponse));
+            const partialResponse = this.extractCommandResponse(this.accumulatedResponse);
+            
+            // Formatear incluso las respuestas parciales
+            try {
+              const formattedPartial = responseFormatter.formatResponse(command, partialResponse);
+              originalResolver(formattedPartial);
+            } catch (error) {
+              logger.error(`Error al formatear respuesta parcial: ${error.message}`);
+              originalResolver(partialResponse);
+            }
           } else {
             reject(new Error('Timeout esperando respuesta al comando'));
           }

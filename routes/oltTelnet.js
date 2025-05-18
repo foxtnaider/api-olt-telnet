@@ -97,17 +97,37 @@ router.post('/send-command', async (req, res) => {
     // Enviar el comando y esperar la respuesta
     logger.info(`Enviando comando: ${command}`);
     const response = await oltManager.sendCommand(command);
-    logger.debug(`Respuesta recibida (${response.length} caracteres)`);
-    logger.silly(`Respuesta completa: ${response}`);
     
-    const status = oltManager.getStatus();
-    logger.info(`Estado actual de la sesión: ${JSON.stringify(status)}`);
+    // Verificar si la respuesta está formateada (objeto) o es texto plano
+    if (response && typeof response === 'object' && response.data) {
+      logger.debug(`Respuesta formateada recibida con ${response.data.length} registros`);
+      logger.silly(`Respuesta formateada: ${JSON.stringify(response)}`);
+      
+      const status = oltManager.getStatus();
+      logger.info(`Estado actual de la sesión: ${JSON.stringify(status)}`);
+      
+      res.json({ 
+        success: true, 
+        response: response.raw, // Respuesta limpia pero sin formato de tabla
+        formatted: response.formatted, // Respuesta con formato de tabla
+        data: response.data, // Datos estructurados
+        status
+      });
+    } else {
+      // Respuesta de texto simple
+      logger.debug(`Respuesta de texto recibida (${response.length} caracteres)`);
+      logger.silly(`Respuesta completa: ${response}`);
+      
+      const status = oltManager.getStatus();
+      logger.info(`Estado actual de la sesión: ${JSON.stringify(status)}`);
+      
+      res.json({ 
+        success: true, 
+        response,
+        status
+      });
+    }
     
-    res.json({ 
-      success: true, 
-      response,
-      status
-    });
     logger.debug('Respuesta de comando exitosa enviada');
   } catch (error) {
     logger.error(`Error al enviar comando: ${error.message}`, { error: error.stack });
