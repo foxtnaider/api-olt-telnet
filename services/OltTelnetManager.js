@@ -18,6 +18,10 @@ class OltTelnetManager {
     this.enablePassword = '';
     this.lastCommand = '';
     this.connectionTimeout = 30000; // 30 segundos de timeout para conexión
+    this.commandTimeout = 30000; // 30 segundos de timeout para comandos
+    this.accumulatedResponse = ''; // Para acumular respuestas paginadas
+    this.pageCount = 0; // Contador de páginas recibidas
+    this.maxPages = 100; // Límite máximo de páginas para evitar bucles infinitos
   }
 
   /**
@@ -133,23 +137,103 @@ class OltTelnetManager {
       // Estamos esperando respuesta a un comando
       if (this.detectCommandPrompt()) {
         logger.info('Prompt de comando detectado, procesando respuesta');
-        // Extraer la respuesta del comando (excluyendo el comando enviado y el prompt final)
-        const response = this.extractCommandResponse();
-        logger.debug(`Respuesta extraida (${response.length} caracteres)`);
-        logger.silly(`Respuesta completa: ${response}`);
         
-        // Actualizar el prompt actual
-        this.updateCurrentPrompt();
-        logger.debug(`Prompt actual actualizado a: ${this.currentPrompt}`);
-        
-        // Resolver la promesa pendiente con la respuesta
-        if (this.responseResolver) {
-          logger.debug('Resolviendo promesa de comando');
-          this.responseResolver(response);
-          this.responseResolver = null;
+        // Cancelar el timeout del comando actual si existe
+        if (this.currentCommandTimeout) {
+          clearTimeout(this.currentCommandTimeout);
+          this.currentCommandTimeout = null;
+          logger.debug('Timeout de comando cancelado');
         }
         
-        this.waitingForResponse = false;
+        // Si hemos estado acumulando respuestas paginadas, añadir la última parte
+        if (this.accumulatedResponse) {
+          this.accumulatedResponse += this.buffer;
+          logger.debug(`Respuesta paginada completa acumulada (${this.accumulatedResponse.length} caracteres)`);
+          // Extraer la respuesta del comando acumulado
+          const response = this.extractCommandResponse(this.accumulatedResponse);
+          logger.debug(`Respuesta paginada extraida (${response.length} caracteres)`);
+          logger.silly(`Respuesta paginada completa: ${response}`);
+          
+          // Actualizar el prompt actual
+          this.updateCurrentPrompt();
+          logger.debug(`Prompt actual actualizado a: ${this.currentPrompt}`);
+          
+          // Resolver la promesa pendiente con la respuesta
+          if (this.responseResolver) {
+            logger.debug('Resolviendo promesa de comando paginado');
+            this.responseResolver(response);
+            this.responseResolver = null;
+          }
+          
+          // Limpiar estado de paginación
+          this.accumulatedResponse = '';
+          this.pageCount = 0;
+          this.waitingForResponse = false;
+          this.buffer = '';
+        } else {
+          // Extraer la respuesta del comando (excluyendo el comando enviado y el prompt final)
+          const response = this.extractCommandResponse();
+          logger.debug(`Respuesta extraida (${response.length} caracteres)`);
+          logger.silly(`Respuesta completa: ${response}`);
+          
+          // Actualizar el prompt actual
+          this.updateCurrentPrompt();
+          logger.debug(`Prompt actual actualizado a: ${this.currentPrompt}`);
+          
+          // Resolver la promesa pendiente con la respuesta
+          if (this.responseResolver) {
+            logger.debug('Resolviendo promesa de comando');
+            this.responseResolver(response);
+            this.responseResolver = null;
+          }
+          
+          this.waitingForResponse = false;
+          this.buffer = '';
+        }
+      } else if (this.buffer.includes('--More--')) {
+        // Detectamos paginación en la respuesta
+        logger.info('Paginación detectada (--More--), enviando espacio para continuar');
+        
+        // Incrementar contador de páginas
+        this.pageCount++;
+        
+        // Verificar si hemos alcanzado el límite máximo de páginas
+        if (this.pageCount > this.maxPages) {
+          logger.warn(`Se alcanzó el límite máximo de páginas (${this.maxPages}), finalizando comando`);
+          
+          // Acumular la última parte
+          this.accumulatedResponse += this.buffer;
+          
+          // Resolver la promesa con lo que tenemos hasta ahora
+          if (this.responseResolver) {
+            logger.debug('Resolviendo promesa de comando paginado (límite alcanzado)');
+            this.responseResolver(this.accumulatedResponse);
+            this.responseResolver = null;
+          }
+          
+          // Limpiar estado de paginación
+          this.accumulatedResponse = '';
+          this.pageCount = 0;
+          this.waitingForResponse = false;
+          this.buffer = '';
+          return;
+        }
+        
+        // Acumular la respuesta actual (sin el --More--)
+        const moreIndex = this.buffer.indexOf('--More--');
+        if (moreIndex !== -1) {
+          this.accumulatedResponse += this.buffer.substring(0, moreIndex);
+        } else {
+          this.accumulatedResponse += this.buffer;
+        }
+        
+        logger.debug(`Página ${this.pageCount} acumulada (${this.accumulatedResponse.length} caracteres totales)`);
+        
+        // Enviar espacio para continuar con la siguiente página
+        this.client.write(' ');
+        logger.debug('Espacio enviado para continuar paginación');
+        
+        // Limpiar el buffer para la siguiente página
         this.buffer = '';
       } else if (this.buffer.includes('Password:')) {
         // Detectamos solicitud de contraseña después de 'configure terminal' o 'enable'
@@ -217,11 +301,12 @@ class OltTelnetManager {
 
   /**
    * Extrae la respuesta de un comando del buffer
+   * @param {string} [inputBuffer] - Buffer opcional para procesar (si no se proporciona, se usa this.buffer)
    * @returns {string} - La respuesta del comando
    */
-  extractCommandResponse() {
-    // Eliminar el comando enviado y el prompt final
-    let response = this.buffer;
+  extractCommandResponse(inputBuffer) {
+    // Usar el buffer proporcionado o el buffer de la instancia
+    let response = inputBuffer || this.buffer;
     
     // Eliminar el eco del comando enviado (primera línea)
     const commandEchoIndex = response.indexOf(this.lastCommand);
@@ -229,6 +314,19 @@ class OltTelnetManager {
       const newlineAfterCommand = response.indexOf('\n', commandEchoIndex);
       if (newlineAfterCommand !== -1) {
         response = response.substring(newlineAfterCommand + 1);
+      }
+    }
+    
+    // Eliminar cualquier indicador de paginación (--More--)
+    let moreIndex;
+    while ((moreIndex = response.indexOf('--More--')) !== -1) {
+      // Eliminar el --More-- y cualquier texto hasta el siguiente salto de línea
+      const nextNewline = response.indexOf('\n', moreIndex);
+      if (nextNewline !== -1) {
+        response = response.substring(0, moreIndex) + response.substring(nextNewline + 1);
+      } else {
+        // Si no hay más saltos de línea, eliminar todo desde --More--
+        response = response.substring(0, moreIndex);
       }
     }
     
@@ -284,6 +382,10 @@ class OltTelnetManager {
         return;
       }
 
+      // Reiniciar el estado de paginación
+      this.accumulatedResponse = '';
+      this.pageCount = 0;
+      
       // Guardar el comando actual
       this.lastCommand = command;
       logger.debug(`Comando guardado: ${command}`);
@@ -300,15 +402,31 @@ class OltTelnetManager {
       logger.debug('Comando enviado al socket');
       
       // Establecer un timeout para la respuesta
-      logger.debug('Configurando timeout para respuesta de comando: 30000ms');
-      setTimeout(() => {
+      const timeoutDuration = command === 'list' || command.includes('show') ? 120000 : this.commandTimeout;
+      logger.debug(`Configurando timeout para respuesta de comando: ${timeoutDuration}ms`);
+      
+      const timeoutId = setTimeout(() => {
         if (this.waitingForResponse) {
           logger.error(`Timeout esperando respuesta al comando: ${command}`);
+          
+          // Si tenemos respuesta acumulada de paginación, la devolvemos aunque esté incompleta
+          if (this.accumulatedResponse && this.accumulatedResponse.length > 0) {
+            logger.warn(`Devolviendo respuesta parcial acumulada (${this.accumulatedResponse.length} caracteres)`);
+            resolve(this.extractCommandResponse(this.accumulatedResponse));
+          } else {
+            reject(new Error('Timeout esperando respuesta al comando'));
+          }
+          
+          // Limpiar estado
           this.waitingForResponse = false;
           this.responseResolver = null;
-          reject(new Error('Timeout esperando respuesta al comando'));
+          this.accumulatedResponse = '';
+          this.pageCount = 0;
         }
-      }, 30000); // 30 segundos de timeout
+      }, timeoutDuration);
+      
+      // Guardar el ID del timeout para poder cancelarlo si es necesario
+      this.currentCommandTimeout = timeoutId;
     });
   }
 
