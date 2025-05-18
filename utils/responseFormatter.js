@@ -51,10 +51,17 @@ function cleanResponse(response) {
   let cleaned = response.replace(/\r\n/g, '\n');
   
   // Eliminar secuencias de backspace y el carácter que borran
-  cleaned = cleaned.replace(/.\b/g, '');
+  // Primero, manejar secuencias simples de un carácter seguido de backspace
+  cleaned = cleaned.replace(/.\x08/g, '');
+  
+  // Luego, manejar secuencias más complejas de múltiples backspaces
+  cleaned = cleaned.replace(/\x08+\s*\x08*/g, '');
   
   // Eliminar secuencias de escape ANSI (colores, cursor, etc)
   cleaned = cleaned.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  
+  // Eliminar otros caracteres de control que puedan causar problemas
+  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
   
   return cleaned;
 }
@@ -71,7 +78,7 @@ function formatMacAddressTable(response) {
   let cleaned = cleanResponse(response);
   
   // Eliminar secuencias de backspace más agresivamente (específico para este comando)
-  cleaned = cleaned.replace(/\b+\s+\b+/g, '');
+  cleaned = cleaned.replace(/\x08+\s*\x08+/g, ''); // Usar código hexadecimal para backspace (\x08)
   
   // Dividir por líneas
   const lines = cleaned.split('\n').filter(line => line.trim() !== '');
